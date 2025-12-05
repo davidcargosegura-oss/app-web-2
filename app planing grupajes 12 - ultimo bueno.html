@@ -1,0 +1,1635 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CARGO SEGURA - Gestor de Tráfico</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        .draggable-source { cursor: grab; }
+        .draggable-source:active { cursor: grabbing; }
+        .drop-zone { transition: all 0.2s; }
+        .drop-zone.drag-over {
+            background-color: #fee2e2; 
+            border: 2px dashed #dc2626; 
+            transform: scale(1.02);
+        }
+        .notes-area {
+            background-image: linear-gradient(#fef9c3 1px, transparent 1px);
+            background-size: 100% 1.5rem;
+            line-height: 1.5rem;
+            border: none !important;
+            padding: 0 !important;
+            resize: none !important;
+            background-color: transparent !important;
+        }
+        /* ELIMINADA altura fija para permitir Stacking/Apilamiento de tarjetas de grupaje */
+        /* .trip-card-fixed { height: 4rem; }  */
+        
+        /* --- COLORES CORPORATIVOS --- */
+        .border-departure { border-left-color: #dc2626 !important; } 
+        .border-return { border-left-color: #1f2937 !important; } 
+        .border-overdue { border-left-color: #f59e0b !important; border-right: 4px solid #f59e0b !important; } 
+
+        @media print {
+            body { background-color: white !important; }
+            header, aside, .no-print, .truck-controls { display: none !important; }
+            main { margin-top: 0; padding: 0; }
+            section { width: 100%; margin: 0; padding: 0; }
+            #planning-board { overflow: visible !important; height: auto !important; }
+            .trip-card-fixed { height: auto; min-height: 50px; }
+            .grid { display: grid !important; }
+        }
+
+        .notify-control {
+            position: absolute;
+            top: 2px;
+            right: 4px;
+            display: flex;
+            align-items: center;
+            width: 105px; 
+        }
+        .notify-control input {
+            padding: 2px 2px !important;
+            height: 20px; 
+            font-size: 10px; 
+            line-height: 1;
+            width: 60px; 
+            text-align: center;
+        }
+        .notify-control button {
+            height: 20px; 
+            padding: 1px 4px;
+            width: 45px; 
+            line-height: 1;
+            margin-left: -1px; 
+        }
+        .notify-date {
+             position: absolute;
+             top: 25px; 
+             right: 4px;
+             font-size: 9px;
+             line-height: 1;
+             color: #94a3b8; 
+             font-family: monospace;
+        }
+        
+        .truck-location-input {
+            margin-top: 5px;
+            padding: 1px 4px;
+            border-radius: 4px;
+            border: 1px solid #cbd5e1; 
+            width: 100%;
+            font-size: 10px;
+            text-align: center;
+            color: #1e293b; 
+            background-color: #f8fafc; 
+            transition: all 0.1s;
+        }
+        .truck-location-input:focus {
+            border-color: #dc2626; 
+            outline: none;
+            background-color: white;
+            box-shadow: 0 0 0 1px #dc2626;
+        }
+        
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* Estilos específicos para Fuera de Servicio */
+        .truck-out-of-service .truck-location-input {
+            border-color: #fca5a5 !important;
+            background-color: #fee2e2 !important;
+            color: #991b1b !important;
+        }
+        .truck-out-of-service .truck-location-input:focus {
+            border-color: #dc2626 !important;
+            box-shadow: 0 0 0 1px #dc2626 !important;
+        }
+        
+        /* Estilos para el selector de zona de viajes (botones/radio) */
+        input[type="radio"]:checked + .zone-label {
+            /* ESTE ESTILO GENERAL ES REEMPLAZADO POR LA LÓGICA CONCRETA DE LA FUNCIÓN JS PARA TENER COLORES DINÁMICOS */
+            outline: 2px solid;
+            outline-offset: 1px;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 h-screen flex flex-col overflow-hidden font-sans text-slate-800">
+
+    <header class="bg-white shadow-sm z-20 flex flex-col no-print border-t-4 border-red-600">
+        <div class="flex items-center justify-between px-6 py-2 border-b border-slate-200 h-16">
+            <div class="flex items-center gap-4">
+                <div class="h-10">
+                    <img src="logo.png" alt="CARGO SEGURA" class="h-full w-auto object-contain" onerror="this.style.display='none'; document.getElementById('fallback-logo').style.display='flex'">
+                    <div id="fallback-logo" class="hidden flex items-center gap-2 text-red-600">
+                        <i class="fa-solid fa-truck-fast text-2xl"></i>
+                        <span class="font-black text-xl italic tracking-tighter">CARGO SEGURA</span>
+                    </div>
+                </div>
+                <div class="h-6 w-px bg-slate-300 mx-2"></div>
+                <h1 class="text-sm font-bold text-slate-500 uppercase tracking-wider">Gestor de Tráfico</h1>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <div id="zone-counters" class="flex items-center gap-1">
+                    </div>
+                
+                <button onclick="exportToCSV()" class="text-xs font-bold text-slate-600 hover:text-green-600 transition flex items-center gap-1 border border-slate-300 px-2 py-1 rounded">
+                    <i class="fa-solid fa-download"></i> CSV
+                </button>
+                <button onclick="printPlanning()" class="text-xs font-bold text-slate-600 hover:text-red-600 transition flex items-center gap-1 border border-slate-300 px-2 py-1 rounded">
+                    <i class="fa-solid fa-print"></i> PDF
+                </button>
+                
+                <button onclick="unassignAllTrips()" class="bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold py-1.5 px-3 rounded shadow transition ml-4 flex items-center gap-1" title="Mueve todos los viajes a Pendientes">
+                    <i class="fa-solid fa-rotate-left"></i> Desasignar Todo
+                </button>
+                
+                <div class="flex items-center gap-2 ml-2 bg-red-50 px-2 py-1 rounded border border-red-100">
+                    <label class="text-xs font-bold text-red-700 uppercase"><i class="fa-regular fa-calendar"></i> Fecha</label>
+                    <input type="date" id="dateFilter" onchange="loadNotesForSelectedDate(); renderAll();" class="bg-transparent text-xs font-bold text-red-900 outline-none cursor-pointer">
+                </div>
+
+                <div class="flex items-center gap-2 ml-2 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                    <label class="text-xs font-bold text-slate-700 uppercase"><i class="fa-solid fa-map-pin"></i> Zona</label>
+                    <select id="zoneFilter" onchange="renderAll()" class="bg-transparent text-xs font-bold text-slate-900 outline-none cursor-pointer">
+                        <option value="ALL">TODAS</option>
+                        </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-yellow-50/50 border-b border-yellow-200 px-6 py-2 flex items-start gap-4">
+            <div class="w-1/3 p-2 bg-white rounded border border-yellow-200 shadow-sm">
+                <label class="text-xs font-bold text-yellow-700 uppercase block mb-1 flex justify-between">
+                    <span>📋 Tareas</span>
+                    <i class="fa-solid fa-thumbtack text-yellow-400"></i>
+                </label>
+                <textarea id="dailyNotes_Tasks" class="notes-area w-full text-xs text-slate-700 h-12 placeholder-slate-400" placeholder="Lista de tareas..." oninput="saveNotesForSelectedDate('Tasks')"></textarea>
+            </div>
+            <div class="w-1/3 p-2 bg-white rounded border border-red-200 shadow-sm">
+                <label class="text-xs font-bold text-red-700 uppercase block mb-1 flex justify-between">
+                    <span>🚨 Incidencias</span>
+                    <i class="fa-solid fa-triangle-exclamation text-red-400"></i>
+                </label>
+                <textarea id="dailyNotes_Incidents" class="notes-area w-full text-xs text-slate-700 h-12 placeholder-slate-400" placeholder="Incidencias urgentes..." oninput="saveNotesForSelectedDate('Incidents')"></textarea>
+            </div>
+            <div class="w-1/3 p-2 bg-white rounded border border-slate-200 shadow-sm">
+                <label class="text-xs font-bold text-slate-600 uppercase block mb-1 flex justify-between">
+                    <span>💬 Info General</span>
+                    <i class="fa-solid fa-circle-info text-slate-400"></i>
+                </label>
+                <textarea id="dailyNotes_General" class="notes-area w-full text-xs text-slate-700 h-12 placeholder-slate-400" placeholder="Información general..." oninput="saveNotesForSelectedDate('General')"></textarea>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex flex-1 overflow-hidden">
+        
+        <aside class="w-96 bg-white border-r border-slate-200 flex flex-col shadow-lg z-10 no-print">
+            <div class="p-3 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h2 class="font-bold text-slate-700 text-sm uppercase tracking-wide">Pendientes</h2>
+                <button onclick="openModal()" class="bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-1.5 px-3 rounded shadow-md transition flex items-center gap-1 transform hover:scale-105">
+                    <i class="fa-solid fa-plus"></i> Nuevo Viaje
+                </button>
+            </div>
+            
+            <div class="p-2 border-b border-slate-100 bg-white">
+                <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Mostrar Tipo de Carga</label>
+                <select id="unassignedTypeFilter" onchange="renderAll()" class="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800 outline-none cursor-pointer p-1.5 rounded">
+                    <option value="ALL">TODOS (Grupaje y Completo)</option>
+                    <option value="GROUPAGE">GRUPAJE</option>
+                    <option value="FULL_LOAD">COMPLETO</option>
+                </select>
+            </div>
+            <div class="flex-1 flex overflow-hidden">
+                <div class="flex-1 flex flex-col border-r border-slate-200">
+                    <div class="bg-red-50 px-3 py-1.5 text-[10px] font-bold text-red-700 uppercase border-b border-red-100 flex justify-between items-center">
+                        <span><i class="fa-solid fa-arrow-right-from-bracket mr-1"></i> Salidas</span>
+                        <span id="count-departure" class="bg-red-200 text-red-800 px-1.5 rounded-full">0</span>
+                    </div>
+                    <div id="unassigned-departure-zone" class="flex-1 overflow-y-auto p-2 space-y-2 bg-slate-100/50 drop-zone shadow-inner" 
+                         ondragover="allowDrop(event)" 
+                         ondrop="drop(event, null, null, 'departure')">
+                    </div>
+                </div>
+                <div class="flex-1 flex flex-col">
+                    <div class="bg-slate-100 px-3 py-1.5 text-[10px] font-bold text-slate-700 uppercase border-b border-slate-200 flex justify-between items-center">
+                        <span><i class="fa-solid fa-arrow-right-to-bracket mr-1"></i> Retornos</span>
+                        <span id="count-return" class="bg-slate-200 text-slate-800 px-1.5 rounded-full">0</span>
+                    </div>
+                    <div id="unassigned-return-zone" class="flex-1 overflow-y-auto p-2 space-y-2 bg-slate-100/50 drop-zone shadow-inner" 
+                         ondragover="allowDrop(event)" 
+                         ondrop="drop(event, null, null, 'return')">
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <section class="flex-1 flex flex-col overflow-hidden bg-slate-200 relative">
+            <div class="grid grid-cols-[140px_1fr_1fr_1fr_1fr] gap-1 px-4 py-2 bg-white border-b border-slate-300 text-[11px] font-bold text-slate-500 uppercase shadow-sm">
+                <div class="flex items-center justify-between pr-2 pl-1">
+                    <span>Matrícula</span>
+                    <button onclick="addTruck()" class="text-slate-400 hover:text-red-600 rounded p-1 transition no-print" title="Añadir Camión">
+                        <i class="fa-solid fa-circle-plus text-lg"></i>
+                    </button>
+                </div>
+                <div class="text-center bg-red-50 text-red-700 py-1 rounded border border-red-100">Salida 1</div>
+                <div class="text-center bg-slate-100 text-slate-700 py-1 rounded border border-slate-200">Retorno 1</div>
+                <div class="text-center bg-red-50 text-red-700 py-1 rounded border border-red-100">Salida 2</div>
+                <div class="text-center bg-slate-100 text-slate-700 py-1 rounded border border-slate-200">Retorno 2</div>
+            </div>
+
+            <div id="planning-board" class="flex-1 overflow-y-auto p-4 space-y-2">
+                </div>
+        </section>
+    </main>
+
+    <div id="modal" class="fixed inset-0 bg-slate-900/70 hidden flex items-center justify-center z-50 backdrop-blur-sm no-print">
+        <div class="bg-white rounded-lg shadow-2xl w-full max-w-md overflow-hidden scale-100 transition-transform border-t-4 border-red-600">
+            <div class="bg-slate-50 px-6 py-3 border-b border-slate-200 flex justify-between items-center">
+                <h3 id="modalTitle" class="font-bold text-slate-800">Nuevo Viaje</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-red-600 transition"><i class="fa-solid fa-times text-lg"></i></button>
+            </div>
+            <form id="tripForm" onsubmit="saveTrip(event)" class="p-6 space-y-4">
+                <input type="hidden" id="editTripId">
+
+                <div class="bg-slate-50 p-3 rounded border border-slate-200">
+                    <label class="text-xs font-bold text-slate-500 uppercase block mb-2">Zona del Viaje</label>
+                    <div id="tripZoneSelector" class="flex flex-wrap gap-2">
+                        </div>
+                </div>
+                <div class="flex justify-between items-center gap-4 bg-slate-50 p-3 rounded border border-slate-200">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase block mb-2">Tipo de Viaje</label>
+                        <div class="flex gap-4">
+                            <label class="flex items-center cursor-pointer">
+                                <input type="radio" name="tripType" value="departure" checked class="form-radio text-red-600 focus:ring-red-500 h-4 w-4 cursor-pointer">
+                                <span class="ml-2 text-sm text-slate-700 font-bold">Salida</span>
+                            </label>
+                            <label class="flex items-center cursor-pointer">
+                                <input type="radio" name="tripType" value="return" class="form-radio text-slate-600 focus:ring-slate-500 h-4 w-4 cursor-pointer">
+                                <span class="ml-2 text-sm text-slate-700 font-bold">Retorno</span>
+                            </label>
+                        </div>
+                    </div>
+                    <label class="flex flex-col items-center cursor-pointer bg-yellow-50 p-2 rounded border border-yellow-200">
+                        <span class="text-xs font-bold text-yellow-700 uppercase">Urgente</span>
+                        <input type="checkbox" id="isUrgent" class="form-checkbox text-yellow-600 focus:ring-yellow-500 h-6 w-6 cursor-pointer mt-1">
+                    </label>
+                    <label class="flex flex-col items-center cursor-pointer bg-sky-50 p-2 rounded border border-sky-200">
+                        <span class="text-xs font-bold text-sky-700 uppercase">Grupaje</span>
+                        <input type="checkbox" id="isGroupage" onchange="togglePalletInputs()" class="form-checkbox text-sky-600 focus:ring-sky-500 h-6 w-6 cursor-pointer mt-1">
+                    </label>
+                    </div>
+
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Cliente</label>
+                    <input type="text" id="client" required class="w-full border-slate-300 rounded text-sm focus:ring-red-500 focus:border-red-500" placeholder="Nombre Cliente">
+                </div>
+                
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Conductor</label>
+                    <input type="text" id="driver" class="w-full border-slate-300 rounded text-sm focus:ring-red-500 focus:border-red-500" placeholder="Nombre del Conductor (Opcional)">
+                </div>
+
+                <div id="palletInputsContainer" class="bg-red-50 p-3 rounded border border-red-200 hidden">
+                    <label class="text-xs font-bold text-red-700 uppercase block mb-2">Cantidad de Palets (CR)</label>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label class="text-xs font-bold text-red-700 uppercase block mb-1">PG (x1.0)</label>
+                            <input type="number" min="0" id="pg" class="w-full border-red-300 rounded text-sm focus:ring-red-500 focus:border-red-500" value="0">
+                        </div>
+                        <div>
+                            <label class="text-xs font-bold text-red-700 uppercase block mb-1">EP (x0.8)</label>
+                            <input type="number" min="0" id="ep" class="w-full border-red-300 rounded text-sm focus:ring-red-500 focus:border-red-500" value="0">
+                        </div>
+                        <div>
+                            <label class="text-xs font-bold text-red-700 uppercase block mb-1">PP (x0.666)</label>
+                            <input type="number" min="0" id="pp" class="w-full border-red-300 rounded text-sm focus:ring-red-500 focus:border-red-500" value="0">
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Origen</label>
+                        <input type="text" id="origin" required class="w-full border-slate-300 rounded text-sm focus:ring-red-500 focus:border-red-500">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Destino</label>
+                        <input type="text" id="destination" required class="w-full border-slate-300 rounded text-sm focus:ring-red-500 focus:border-red-500">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Carga</label>
+                        <input type="date" id="loadDate" required class="w-full border-slate-300 rounded text-sm focus:ring-red-500 focus:border-red-500">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase block mb-1">Descarga</label>
+                        <input type="date" id="unloadDate" required class="w-full border-slate-300 rounded text-sm focus:ring-red-500 focus:border-red-500">
+                    </div>
+                </div>
+
+                <div class="flex gap-3 pt-4">
+                    <button type="button" id="deleteButton" onclick="deleteTrip()" class="w-1/3 bg-slate-100 text-slate-600 hover:bg-red-100 hover:text-red-600 font-bold py-2.5 rounded transition hidden">
+                        <i class="fa-solid fa-trash"></i> Eliminar
+                    </button>
+                    <button type="submit" id="submitButton" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded shadow-lg shadow-red-500/30 transition">
+                        Guardar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. CONSTANTES, DATOS, PERSISTENCIA Y UTILIDADES
+        // ==========================================
+        
+        const ZONES = [
+            { name: 'Murcia', color: 'bg-indigo-500', baseColor: 'indigo', code: 'MU' },
+            { name: 'Madrid', color: 'bg-sky-500', baseColor: 'sky', code: 'MA' },
+            { name: 'Valencia', color: 'bg-amber-500', baseColor: 'amber', code: 'VA' },
+            { name: 'Andalucía', color: 'bg-emerald-500', baseColor: 'emerald', code: 'AN' },
+            { name: 'Barcelona', color: 'bg-pink-500', baseColor: 'pink', code: 'BCN' },
+            { name: 'Norte', color: 'bg-slate-500', baseColor: 'slate', code: 'NO' },
+        ];
+        const ZONE_MAP = ZONES.reduce((acc, zone) => {
+            acc[zone.name] = zone;
+            return acc;
+        }, {});
+        
+        let trucks = []; 
+        let trips = [];
+        let trucksFdsStatusByDate = {}; 
+        const STORAGE_KEY_SUFFIX = '_v31'; // Versión 31 - Ultra Compact Truck Card (Zones single line, min height reduced)
+        const OLD_DATE = '2000-01-01'; 
+
+        function compareDates(date1, date2) {
+            if (!date1 || !date2) return 0;
+            const d1 = parseInt(date1.replace(/-/g, ''));
+            const d2 = parseInt(date2.replace(/-/g, ''));
+            if (d1 < d2) return -1;
+            if (d1 > d2) return 1;
+            return 0;
+        }
+        
+        // --- NEW: CR CALCULATION UTILITIES ---
+        /**
+         * Calcula la Cantidad Real (CR) de palets.
+         * CR = (PG * 1) + (EP * 0.8) + (PP * 0.666)
+         */
+        function calculateCR(pg, ep, pp) {
+            // Aseguramos que los valores sean numéricos y no NaN
+            const p_pg = parseFloat(pg) || 0;
+            const p_ep = parseFloat(ep) || 0;
+            const p_pp = parseFloat(pp) || 0;
+            
+            const cr = (p_pg * 1.0) + (p_ep * 0.8) + (p_pp * 0.666);
+            // Redondeamos a 2 decimales
+            return Math.round(cr * 100) / 100; 
+        }
+
+        function getTripCR(trip) {
+            return calculateCR(trip.pg || 0, trip.ep || 0, trip.pp || 0);
+        }
+        // --- END NEW UTILITIES ---
+
+        function getFdsKey() { return 'gt_fds_status' + STORAGE_KEY_SUFFIX; }
+        function saveFdsData() { localStorage.setItem(getFdsKey(), JSON.stringify(trucksFdsStatusByDate)); }
+        function loadFdsData() {
+            const savedFds = localStorage.getItem(getFdsKey());
+            trucksFdsStatusByDate = savedFds ? JSON.parse(savedFds) : {};
+        }
+
+        function isTruckOutOfService(plate, date) {
+            return trucksFdsStatusByDate[plate] && trucksFdsStatusByDate[plate][date] === true;
+        }
+
+        function getNotesKey(date, type = 'General') { 
+            return 'gt_notes_' + type + '_' + (date || 'default') + STORAGE_KEY_SUFFIX;
+        }
+
+        function saveNotesForSelectedDate(type) {
+            const date = document.getElementById('dateFilter').value;
+            const elementId = `dailyNotes_${type}`;
+            const notesContent = document.getElementById(elementId).value;
+            const key = getNotesKey(date, type);
+            localStorage.setItem(key, notesContent);
+        }
+
+        function loadNotesForSelectedDate() {
+            const date = document.getElementById('dateFilter').value;
+            const noteTypes = ['Tasks', 'Incidents', 'General'];
+            
+            noteTypes.forEach(type => {
+                const key = getNotesKey(date, type);
+                const savedNotes = localStorage.getItem(key);
+                const element = document.getElementById(`dailyNotes_${type}`);
+                if (element) {
+                     element.value = savedNotes || '';
+                }
+            });
+        }
+
+        function loadData() {
+            const savedTrucks = localStorage.getItem('gt_trucks' + STORAGE_KEY_SUFFIX);
+            const savedTrips = localStorage.getItem('gt_trips' + STORAGE_KEY_SUFFIX);
+            
+            const dateFilterElement = document.getElementById('dateFilter');
+            const today = new Date().toISOString().split('T')[0];
+            if (!dateFilterElement.value) {
+                dateFilterElement.value = today;
+            }
+            
+            // Populate Zone Filter
+            const zoneFilterEl = document.getElementById('zoneFilter');
+            if (zoneFilterEl.options.length <= 1) { 
+                ZONES.forEach(z => {
+                    const option = document.createElement('option');
+                    option.value = z.name;
+                    option.textContent = z.name;
+                    zoneFilterEl.appendChild(option);
+                });
+            }
+
+            loadNotesForSelectedDate();
+            loadFdsData(); 
+
+            // --- Carga de Camiones ---
+            let initialTrucks = [
+                { plate: '1234-BBB', location: 'Base', locationLastUpdatedDate: OLD_DATE, creationDate: OLD_DATE, deletionDate: null, zones: ['Murcia'], isLocationManual: false }, 
+                { plate: '5678-CRD', location: 'Cargando', locationLastUpdatedDate: OLD_DATE, creationDate: OLD_DATE, deletionDate: null, zones: ['Madrid', 'Valencia'], isLocationManual: false }, 
+                { plate: '9012-FGH', location: 'Desconocida', locationLastUpdatedDate: OLD_DATE, creationDate: OLD_DATE, deletionDate: null, zones: ['Norte'], isLocationManual: false }
+            ];
+
+            if (savedTrucks) {
+                trucks = JSON.parse(savedTrucks).map(t => ({ 
+                    plate: t.plate, 
+                    location: t.location || '',
+                    locationLastUpdatedDate: t.locationLastUpdatedDate || OLD_DATE, 
+                    creationDate: t.creationDate || OLD_DATE, 
+                    deletionDate: t.deletionDate || null,
+                    zones: t.zones || [],
+                    isLocationManual: t.isLocationManual || false
+                }));
+            } else {
+                trucks = initialTrucks;
+            }
+            
+            // Asegurar que los camiones de nueva creación tengan OLD_DATE para forzar el primer cálculo
+            trucks.forEach(t => {
+                if (!t.locationLastUpdatedDate) t.locationLastUpdatedDate = OLD_DATE;
+            });
+
+
+            // --- Carga de Viajes ---
+            if (savedTrips) {
+                trips = JSON.parse(savedTrips);
+            } else {
+                const dayBeforeYesterday = getPreviousDay(getPreviousDay(today));
+                const yesterday = getPreviousDay(today);
+                
+                trips = [
+                    // Viaje de ejemplo completado hoy (unloadDate = today)
+                    // -> Ubicación de 1234-BBB para hoy (today) debería ser 'Murcia Base' (o el destino del viaje 100)
+                    { id: 100, type: 'return', client: 'Test Loc Fijo', driver: 'Driver Test', origin: 'Madrid', destination: 'Murcia Base', loadDate: yesterday, unloadDate: today, assignedTruck: '1234-BBB', assignedSlot: 3, isUrgent: false, isGroupage: true, notifyTime: "", isNotified: false, zone: 'Murcia', pg: 10, ep: 0, pp: 0 }, 
+                    
+                    { id: 1, type: 'departure', client: 'Cliente Ejemplo 1', driver: 'Juan Pérez', origin: 'Valencia', destination: 'Madrid', loadDate: getNextDay(today), unloadDate: getNextDay(getNextDay(today)), assignedTruck: '5678-CRD', assignedSlot: 0, isUrgent: false, isGroupage: false, notifyTime: "08:00", isNotified: false, zone: 'Madrid', pg: 0, ep: 0, pp: 0 }, // Viaje COMPLETO
+                    { id: 2, type: 'return', client: 'Cliente Ejemplo 2', driver: 'Juan Pérez', origin: 'Zaragoza', destination: 'Coruña', loadDate: today, unloadDate: today, assignedTruck: '9012-FGH', assignedSlot: 1, isUrgent: false, isGroupage: false, notifyTime: "10:30", isNotified: true, zone: 'Norte', pg: 0, ep: 0, pp: 0 }, // Viaje COMPLETO
+                    // Viaje pendiente de asignar para ejemplo de CR
+                    { id: 3, type: 'departure', client: 'Pendiente Palets', driver: '', origin: 'Sevilla', destination: 'Lisboa', loadDate: today, unloadDate: getNextDay(today), assignedTruck: null, assignedSlot: null, isUrgent: true, isGroupage: true, notifyTime: "", isNotified: false, zone: 'Andalucía', pg: 2, ep: 5, pp: 3 }, 
+                    // Viaje de Grupaje de prueba 2 para stacking
+                    { id: 4, type: 'departure', client: 'Grupo Stacking', driver: '', origin: 'Alicante', destination: 'Barcelona', loadDate: today, unloadDate: getNextDay(today), assignedTruck: null, assignedSlot: null, isUrgent: false, isGroupage: true, notifyTime: "", isNotified: false, zone: 'Barcelona', pg: 1, ep: 1, pp: 1 }, 
+                ];
+            }
+            trips = trips.map(t => ({ 
+                ...t, 
+                driver: t.driver || '', 
+                zones: t.zones || [], 
+                zone: t.zone || null,
+                isUrgent: t.isUrgent === undefined ? false : t.isUrgent,
+                isGroupage: t.isGroupage === undefined ? false : t.isGroupage, 
+                // NEW: Initialize pallet counts
+                pg: t.pg !== undefined ? parseInt(t.pg) : 0, 
+                ep: t.ep !== undefined ? parseInt(t.ep) : 0, 
+                pp: t.pp !== undefined ? parseInt(t.pp) : 0, 
+            }));
+            
+            saveData(); 
+            renderAll();
+        }
+
+        function getNextDay(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString + 'T00:00:00'); 
+            date.setDate(date.getDate() + 1);
+            return date.toISOString().split('T')[0];
+        }
+
+        function getPreviousDay(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString + 'T00:00:00'); 
+            date.setDate(date.getDate() - 1);
+            return date.toISOString().split('T')[0];
+        }
+
+        function saveData() {
+            localStorage.setItem('gt_trucks' + STORAGE_KEY_SUFFIX, JSON.stringify(trucks));
+            localStorage.setItem('gt_trips' + STORAGE_KEY_SUFFIX, JSON.stringify(trips));
+        }
+
+        function unassignAllTrips() {
+            const dateFilter = document.getElementById('dateFilter').value; 
+            
+            if(confirm(`¿Estás seguro de desasignar TODOS los viajes del día ${formatDate(dateFilter)}? Se moverán a Pendientes.`)) {
+                
+                const trucksToRecalculate = new Set();
+                
+                trips.forEach(t => {
+                    if(t.loadDate === dateFilter) { 
+                        if (t.assignedTruck) {
+                             trucksToRecalculate.add(t.assignedTruck); 
+                        }
+                        t.assignedTruck = null;
+                        t.assignedSlot = null;
+                        t.notifyTime = ""; 
+                        t.isNotified = false;
+                    }
+                });
+                
+                trucksToRecalculate.forEach(plate => clearTruckPersistence(plate));
+                
+                saveData();
+                renderAll();
+            }
+        }
+        
+        function isOverdue(dateString) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const loadDate = new Date(dateString);
+            loadDate.setHours(0, 0, 0, 0);
+            return loadDate < today;
+        }
+
+        function formatDate(str) {
+            if(!str) return '';
+            const d = new Date(str + 'T00:00:00'); 
+            return d.toLocaleDateString('es-ES', {day:'2-digit', month:'2-digit'});
+        }
+        
+        // ==========================================
+        // 1.1 FUNCIONES DE UBICACIÓN AUTOMÁTICA
+        // ==========================================
+
+        /**
+         * Obtiene la ubicación sugerida de un camión para una fecha.
+         */
+        function getTruckSuggestedLocation(truckPlate, currentDate, forceRecalculate = false) {
+            const truck = trucks.find(t => t.plate === truckPlate);
+            if (!truck) return '';
+            
+            // 1. PRIORIDAD MÁXIMA: Override manual para el día ACTUAL.
+            if (!forceRecalculate && truck.location && truck.location.trim() !== '') {
+                if (truck.isLocationManual && compareDates(truck.locationLastUpdatedDate, currentDate) === 0) {
+                    return truck.location;
+                }
+            }
+            
+            let calculatedLocation = '';
+            
+            // 2. CÁLCULO: Encontrar el último destino conocido antes/igual a currentDate.
+            let lastCompletedTrip = trips
+                .filter(t => 
+                    t.assignedTruck === truckPlate && 
+                    t.unloadDate && 
+                    compareDates(t.unloadDate, currentDate) <= 0 
+                )
+                .sort((a, b) => compareDates(b.unloadDate, a.unloadDate))[0]; 
+
+            if (lastCompletedTrip && lastCompletedTrip.destination && lastCompletedTrip.destination.trim() !== '') {
+                calculatedLocation = lastCompletedTrip.destination;
+            } else {
+                 if (compareDates(truck.locationLastUpdatedDate, OLD_DATE) === 0 && truck.location && truck.location.trim() !== '') {
+                     calculatedLocation = truck.location; 
+                 }
+            }
+            
+            // 3. PERSISTENCIA & RETURN de la Ubicación Calculada 
+            if (calculatedLocation) {
+                if (compareDates(currentDate, truck.locationLastUpdatedDate) >= 0 || truck.isLocationManual) { 
+                     truck.location = calculatedLocation;
+                     truck.locationLastUpdatedDate = currentDate; 
+                     truck.isLocationManual = false; 
+                     saveData(); 
+                }
+                
+                return calculatedLocation; 
+            }
+            
+            // 4. FALLBACK ROBUSTO: Última ubicación persistente conocida (o vacía).
+            return truck.location || '';
+        }
+        
+        /**
+         * Función: Fuerza el reset del estado persistente a OLD_DATE y borra la bandera manual.
+         */
+        function clearTruckPersistence(plate) {
+            const truck = trucks.find(t => t.plate === plate);
+            if (!truck) return;
+            
+            truck.location = ''; 
+            truck.locationLastUpdatedDate = OLD_DATE; 
+            truck.isLocationManual = false; 
+            
+            saveData(); 
+        }
+
+        // ==========================================
+        // GESTIÓN DE UBICACIÓN MANUAL 
+        // ==========================================
+        function updateTruckLocation(plate, location) {
+            const truckIndex = trucks.findIndex(t => t.plate === plate);
+            if (truckIndex !== -1) {
+                const dateFilter = document.getElementById('dateFilter').value; 
+                trucks[truckIndex].location = location;
+                trucks[truckIndex].locationLastUpdatedDate = dateFilter; 
+                trucks[truckIndex].isLocationManual = true; 
+                saveData();
+                renderAll(); 
+            }
+        }
+        
+        // ==========================================
+        // 2. LÓGICA DE ZONAS, CAMIONES Y RENDER
+        // ==========================================
+
+        function renderAll() {
+            const dateFilter = document.getElementById('dateFilter').value; 
+            renderUnassigned(dateFilter);
+            renderPlanning(dateFilter);
+            renderZoneCounters(dateFilter);
+        }
+
+        function renderZoneCounters(dateFilter) {
+            const counterDiv = document.getElementById('zone-counters');
+            counterDiv.innerHTML = '';
+            
+            const activeTrips = trips.filter(t => t.loadDate === dateFilter);
+            const activeTrucks = trucks.filter(t => isTruckActiveForDate(t, dateFilter));
+
+            const zoneCounts = {};
+            ZONES.forEach(z => {
+                zoneCounts[z.name] = { trucks: 0, trips: 0 };
+            });
+
+            activeTrucks.forEach(truck => {
+                truck.zones.forEach(zoneName => {
+                    if (zoneCounts[zoneName]) {
+                        zoneCounts[zoneName].trucks++;
+                    }
+                });
+            });
+
+            activeTrips.forEach(trip => {
+                if (trip.zone && zoneCounts[trip.zone]) {
+                    zoneCounts[trip.zone].trips++;
+                }
+            });
+
+            ZONES.forEach(zone => {
+                const counts = zoneCounts[zone.name];
+                if (counts.trucks === 0 && counts.trips === 0) return; 
+                
+                const badge = document.createElement('div');
+                badge.className = `flex items-center p-1.5 rounded-md text-white shadow-sm text-xs font-bold ${zone.color}`;
+                badge.title = `${counts.trucks} camiones y ${counts.trips} viajes en ${zone.name}`;
+                badge.innerHTML = `
+                    ${zone.code}: 
+                    <span class="ml-1 px-1.5 rounded-full bg-white/30">${counts.trucks}T</span>
+                    <span class="ml-1 px-1.5 rounded-full bg-white/50">${counts.trips}V</span>
+                `;
+                counterDiv.appendChild(badge);
+            });
+        }
+        
+        /**
+         * Lógica de gestión de historial de camiones.
+         */
+        function isTruckActiveForDate(truck, dateFilter) {
+            const isCreated = compareDates(truck.creationDate, dateFilter) <= 0;
+            const isNotDeleted = truck.deletionDate === null || compareDates(truck.deletionDate, dateFilter) > 0;
+            return isCreated && isNotDeleted;
+        }
+        
+        function toggleTruckZone(plate, zoneName) {
+            const truck = trucks.find(t => t.plate === plate);
+            if (!truck) return;
+
+            if (!truck.zones) truck.zones = [];
+
+            const index = truck.zones.indexOf(zoneName);
+            if (index > -1) {
+                truck.zones.splice(index, 1); 
+            } else {
+                truck.zones.push(zoneName); 
+            }
+
+            saveData();
+            renderAll();
+        }
+
+        function createZoneButton(plate, zone, activeZones) {
+            const isActive = activeZones.includes(zone.name);
+            const classes = isActive 
+                ? `text-white ${zone.color} shadow-lg hover:opacity-80` 
+                : `bg-slate-700/50 text-slate-400 hover:bg-slate-700`;
+            
+            return `<button onclick="toggleTruckZone('${plate}', '${zone.name}'); event.stopPropagation();" 
+                            class="text-[8px] font-bold p-0.5 rounded-full w-5 h-5 flex items-center justify-center transition ${classes}"
+                            title="Marcar ${zone.name}">
+                        ${zone.code}
+                    </button>`;
+        }
+
+
+        function addTruck() {
+            const plate = prompt("Introduce la nueva matrícula:");
+            const dateFilter = document.getElementById('dateFilter').value; 
+            
+            if (plate && plate.trim() !== "") {
+                const upperPlate = plate.toUpperCase().trim();
+                let existingTruck = trucks.find(t => t.plate === upperPlate);
+                
+                if (existingTruck) {
+                    existingTruck.deletionDate = null;
+                    alert(`La matrícula ${upperPlate} ya existía en el historial. Ha sido reactivada a partir de hoy.`);
+                } else {
+                    trucks.push({ 
+                        plate: upperPlate, 
+                        location: '', 
+                        locationLastUpdatedDate: OLD_DATE, 
+                        creationDate: dateFilter, 
+                        deletionDate: null,
+                        zones: [],
+                        isLocationManual: false
+                    });
+                }
+                
+                saveData(); 
+                renderAll();
+            }
+        }
+
+        function deleteTruck(plate) {
+            const dateFilter = document.getElementById('dateFilter').value;
+            
+            if(confirm(`¿Marcar camión ${plate} como ELIMINADO a partir del ${formatDate(dateFilter)}? Esto desasignará sus viajes de este día en adelante, pero mantendrá el historial anterior.`)) {
+                
+                const truckIndex = trucks.findIndex(t => t.plate === plate);
+                if (truckIndex === -1) return;
+                
+                trucks[truckIndex].deletionDate = dateFilter;
+                
+                trips.forEach(t => { 
+                    if(t.assignedTruck === plate && compareDates(t.loadDate, dateFilter) >= 0) { 
+                        t.assignedTruck = null; 
+                        t.assignedSlot = null; 
+                        t.notifyTime = "";
+                        t.isNotified = false;
+                    }
+                });
+                
+                if (trucksFdsStatusByDate[plate]) {
+                    Object.keys(trucksFdsStatusByDate[plate]).forEach(date => {
+                        if (compareDates(date, dateFilter) >= 0) {
+                            delete trucksFdsStatusByDate[plate][date];
+                        }
+                    });
+                    saveFdsData(); 
+                }
+
+                saveData(); 
+                renderAll(); 
+            }
+        }
+        
+        // ==========================================
+        // 3. LÓGICA FUERA DE SERVICIO (FDS) Y RENDER
+        // ==========================================
+
+        function toggleOutOfService(plate) {
+            const dateFilter = document.getElementById('dateFilter').value; 
+            const truck = trucks.find(t => t.plate === plate);
+            if (!truck) return;
+
+            if (!trucksFdsStatusByDate[plate]) {
+                trucksFdsStatusByDate[plate] = {};
+            }
+
+            const currentState = isTruckOutOfService(plate, dateFilter);
+            const newState = !currentState;
+            
+            trucksFdsStatusByDate[plate][dateFilter] = newState;
+
+            if (newState) {
+                // Al poner FDS, forzamos un reset para que al mirar el día anterior
+                clearTruckPersistence(plate); 
+                
+                trips.forEach(t => { 
+                    if(t.assignedTruck === plate && t.loadDate === dateFilter) { 
+                        t.assignedTruck = null; 
+                        t.assignedSlot = null; 
+                        t.notifyTime = "";
+                        t.isNotified = false;
+                    }
+                });
+                alert(`Camión ${plate} marcado como "Fuera de Servicio" para el día ${formatDate(dateFilter)}. Sus viajes han sido movidos a Pendientes.`);
+            } else {
+                 alert(`Camión ${plate} vuelve a estar "En Servicio" para el día ${formatDate(dateFilter)}.`);
+            }
+
+            saveFdsData(); 
+            saveData();    
+            renderAll(); 
+        }
+        
+        function renderPlanning(dateFilter) {
+            const board = document.getElementById('planning-board');
+            board.innerHTML = '';
+            
+            const selectedZoneFilter = document.getElementById('zoneFilter').value;
+
+            let activeTrucks = trucks.filter(t => isTruckActiveForDate(t, dateFilter));
+            
+            if (selectedZoneFilter !== 'ALL') {
+                activeTrucks = activeTrucks.filter(t => t.zones.includes(selectedZoneFilter));
+            }
+
+            const inServiceTrucks = activeTrucks.filter(t => !isTruckOutOfService(t.plate, dateFilter)).sort((a, b) => a.plate.localeCompare(b.plate));
+            const outOfServiceTrucks = activeTrucks.filter(t => isTruckOutOfService(t.plate, dateFilter)); 
+            const sortedTrucks = [...inServiceTrucks, ...outOfServiceTrucks];
+
+            sortedTrucks.forEach(truck => {
+                const plate = truck.plate;
+                const isOutOfService = isTruckOutOfService(plate, dateFilter); 
+                
+                const firstZone = truck.zones.length > 0 ? ZONE_MAP[truck.zones[0]] : null;
+                // Nota: Tailwind necesita clases completas en el CSS estático para funcionar. Si no lo has definido en el style, puede fallar aquí. Usaremos un fallback a slate.
+                const baseColor = firstZone ? firstZone.baseColor : 'slate'; 
+                
+                // NEW: Calculate assigned trips and determine the required min-height
+                const assignedTrips = trips.filter(t => 
+                    t.assignedTruck === plate && 
+                    t.loadDate === dateFilter 
+                );
+                
+                const hasAssignedTripsToday = assignedTrips.length > 0;
+                const hasGroupageAssigned = assignedTrips.some(t => t.isGroupage === true);
+
+                // Base height for the row. Min-height: Reduced for ultra-compact. 96px (6rem) if trips assigned, 80px (5rem) if no trips.
+                const baseMinHeight = hasAssignedTripsToday ? 'min-h-[6rem]' : 'min-h-[5rem]'; 
+                
+                const rowClass = isOutOfService 
+                    ? `grid grid-cols-[140px_1fr_1fr_1fr_1fr] gap-2 p-2 rounded border-4 border-red-500 bg-red-50/50 items-stretch ${baseMinHeight} hover:shadow-xl transition-shadow truck-out-of-service`
+                    : `grid grid-cols-[140px_1fr_1fr_1fr_1fr] gap-2 bg-white p-2 rounded border border-slate-200 items-stretch ${baseMinHeight} hover:shadow-md transition-shadow`;
+
+                const plateBgClass = isOutOfService 
+                    ? 'bg-red-700'
+                    : `bg-${baseColor}-800`;
+                    
+                const row = document.createElement('div');
+                row.className = rowClass;
+                
+                const displayLocation = getTruckSuggestedLocation(plate, dateFilter); 
+
+                const totalTruckCR = assignedTrips.reduce((sum, t) => sum + getTripCR(t), 0);
+                const formattedTruckCR = (Math.round(totalTruckCR * 10) / 10).toFixed(1); 
+                const totalTruckPG = assignedTrips.reduce((sum, t) => sum + (t.pg || 0), 0);
+                const totalTruckEP = assignedTrips.reduce((sum, t) => sum + (t.ep || 0), 0);
+                const totalTruckPP = assignedTrips.reduce((sum, t) => sum + (t.pp || 0), 0);
+                
+                // NEW: Conditional Pallet Summary HTML
+                let palletSummaryHTML = '';
+                if (hasGroupageAssigned) {
+                    palletSummaryHTML = `
+                        <div class="text-center text-white text-[10px] font-bold mt-1">
+                            <span class="bg-red-600/90 text-white px-2 py-0.5 rounded-full shadow-md">CR: ${formattedTruckCR}</span>
+                        </div>
+                        <div class="flex justify-center gap-1 mt-1 mb-0 text-center text-white text-[9px] font-bold">
+                            <span class="bg-white/10 px-1 rounded" title="Palets Grandes (PG)">PG:${totalTruckPG}</span>
+                            <span class="bg-white/10 px-1 rounded" title="Euro Palets (EP)">EP:${totalTruckEP}</span>
+                            <span class="bg-white/10 px-1 rounded" title="Medios Palets (PP)">PP:${totalTruckPP}</span>
+                        </div>
+                    `;
+                }
+
+                const plateDiv = document.createElement('div');
+                const plateDivClass = `flex flex-col justify-between ${plateBgClass} text-white rounded p-2 shadow-inner relative group`;
+                
+                plateDiv.className = plateDivClass;
+                plateDiv.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <i class="fa-solid fa-truck ${isOutOfService ? 'text-red-300' : 'text-slate-500'} text-xs"></i>
+                        <button onclick="deleteTruck('${plate}')" class="text-slate-500 hover:text-red-400 transition opacity-0 group-hover:opacity-100 no-print" title="Marcar como Eliminado (a partir de hoy)">
+                            <i class="fa-solid fa-trash-can text-xs"></i>
+                        </button>
+                    </div>
+                    <div class="font-mono font-bold text-sm tracking-wider text-center mt-1 border-2 border-white/20 rounded px-1 py-0.5 ${isOutOfService ? 'bg-red-800' : `bg-${baseColor}-900`}">${plate}</div>
+                    
+                    ${palletSummaryHTML}
+
+                    <div class="flex justify-center gap-1 mt-1 mb-0">
+                        ${ZONES.map(z => createZoneButton(plate, z, truck.zones)).join('')}
+                    </div>
+                    <input type="text" 
+                           placeholder="Ubicación"
+                           class="truck-location-input ${isOutOfService ? 'border-red-500' : ''}" 
+                           value="${displayLocation}"
+                           oninput="updateTruckLocation('${plate}', this.value)"
+                           ondblclick="event.stopPropagation();">
+
+                    <button onclick="toggleOutOfService('${plate}')"
+                            class="absolute -bottom-2 -right-2 ${isOutOfService ? 'bg-red-900 hover:bg-red-800' : 'bg-slate-500 hover:bg-slate-600'} text-white text-[9px] font-bold p-1 rounded-full shadow-lg transition transform hover:scale-105"
+                            title="${isOutOfService ? 'Quitar Fuera de Servicio para hoy' : 'Marcar Fuera de Servicio para hoy'}">
+                        <i class="fa-solid fa-wrench"></i> ${isOutOfService ? 'FDS' : 'OK'}
+                    </button>
+                    `;
+                row.appendChild(plateDiv);
+
+                for (let i = 0; i < 4; i++) {
+                    const isReturn = i % 2 !== 0; 
+                    const slotDiv = document.createElement('div');
+                    
+                    const isDisabledSlot = isOutOfService;
+                    const slotClasses = isDisabledSlot 
+                        ? 'border-red-300 bg-red-100/50 cursor-not-allowed' 
+                        : (isReturn ? 'border-slate-300 bg-slate-50/50' : 'border-red-200 bg-red-50/30');
+
+                    slotDiv.className = `drop-zone rounded border-2 border-dashed flex flex-col justify-start p-1 relative transition-colors h-full ${slotClasses} space-y-1`;
+                    
+                    if (!isDisabledSlot) {
+                        slotDiv.setAttribute('ondragover', 'allowDrop(event)');
+                        slotDiv.setAttribute('ondrop', `drop(event, '${plate}', ${i})`);
+                    } else {
+                        slotDiv.setAttribute('ondragover', 'event.preventDefault()');
+                        slotDiv.setAttribute('ondrop', 'event.preventDefault()');
+                    }
+                    slotDiv.setAttribute('data-slottype', isReturn ? 'return' : 'departure');
+
+                    const assignedTripsInSlot = trips.filter(t => 
+                        t.assignedTruck === plate && 
+                        t.assignedSlot === i && 
+                        t.loadDate === dateFilter 
+                    );
+
+                    if (assignedTripsInSlot.length > 0) {
+                        
+                        // NEW: Check for single FULL_LOAD trip
+                        const isSingleFullLoad = assignedTripsInSlot.length === 1 && assignedTripsInSlot[0].isGroupage === false;
+                        
+                        assignedTripsInSlot.sort((a, b) => { // Sort by Groupage/Full Load status for visual consistency
+                             if (a.isGroupage && !b.isGroupage) return -1; // Groupage first
+                             if (!a.isGroupage && b.isGroupage) return 1;
+                             return 0;
+                        }).forEach(trip => {
+                            // Pass the flag for full height rendering
+                            const tripCard = createTripCard(trip, isSingleFullLoad); 
+                            
+                            // Adjust margins for stacking vs. single full-load card
+                            if (!isSingleFullLoad) {
+                                tripCard.style.marginBottom = '4px'; 
+                            } else {
+                                tripCard.style.marginBottom = '0';
+                                tripCard.style.maxHeight = '100%'; 
+                            }
+                            
+                            slotDiv.appendChild(tripCard);
+                        });
+                        
+                        if (isDisabledSlot) { slotDiv.innerHTML = ''; } 
+                        
+                    } else if (isDisabledSlot) {
+                        slotDiv.innerHTML = `<span class="text-[9px] text-center text-red-500 font-bold uppercase select-none pointer-events-none absolute inset-0 flex items-center justify-center rotate-45">FUERA DE SERVICIO</span>`;
+                    } else {
+                        slotDiv.innerHTML = `<span class="text-[9px] text-center text-slate-300 font-bold uppercase select-none pointer-events-none absolute inset-0 flex items-center justify-center">${isReturn ? 'RET' : 'SAL'} ${Math.floor(i/2)+1}</span>`;
+                    }
+                    row.appendChild(slotDiv);
+                }
+                
+                board.appendChild(row);
+            });
+        }
+
+        function renderUnassigned(dateFilter) {
+            const unassignedDepartureZone = document.getElementById('unassigned-departure-zone');
+            const unassignedReturnZone = document.getElementById('unassigned-return-zone');
+            unassignedDepartureZone.innerHTML = '';
+            unassignedReturnZone.innerHTML = '';
+            
+            const selectedZoneFilter = document.getElementById('zoneFilter').value;
+            // NEW: Leer el filtro de tipo de carga (Grupaje/Completo)
+            const unassignedTypeFilter = document.getElementById('unassignedTypeFilter').value; 
+
+            let unassignedTrips = trips.filter(t => t.assignedTruck === null);
+
+            if (dateFilter) {
+                unassignedTrips = unassignedTrips.filter(t => t.loadDate === dateFilter);
+            }
+            
+            if (selectedZoneFilter !== 'ALL') {
+                unassignedTrips = unassignedTrips.filter(t => t.zone === selectedZoneFilter);
+            }
+            
+            // NEW: Aplicar el filtro de tipo de carga
+            if (unassignedTypeFilter === 'GROUPAGE') {
+                unassignedTrips = unassignedTrips.filter(t => t.isGroupage === true);
+            } else if (unassignedTypeFilter === 'FULL_LOAD') {
+                unassignedTrips = unassignedTrips.filter(t => t.isGroupage === false);
+            }
+
+            const departureTrips = unassignedTrips.filter(t => t.type === 'departure');
+            const returnTrips = unassignedTrips.filter(t => t.type === 'return');
+            
+            // NEW: Calculate Total Pallets & CR
+            const totalDepartureCR = departureTrips.reduce((sum, t) => sum + getTripCR(t), 0);
+            const totalReturnCR = returnTrips.reduce((sum, t) => sum + getTripCR(t), 0);
+            const formattedDepartureCR = (Math.round(totalDepartureCR * 10) / 10).toFixed(1); 
+            const formattedReturnCR = (Math.round(totalReturnCR * 10) / 10).toFixed(1);
+
+            const totalDeparturePG = departureTrips.reduce((sum, t) => sum + (t.pg || 0), 0);
+            const totalDepartureEP = departureTrips.reduce((sum, t) => sum + (t.ep || 0), 0);
+            const totalDeparturePP = departureTrips.reduce((sum, t) => sum + (t.pp || 0), 0);
+
+            const totalReturnPG = returnTrips.reduce((sum, t) => sum + (t.pg || 0), 0);
+            const totalReturnEP = returnTrips.reduce((sum, t) => sum + (t.ep || 0), 0);
+            const totalReturnPP = returnTrips.reduce((sum, t) => sum + (t.pp || 0), 0);
+            // END NEW UNASSIGNED PALLET CALCULATION
+
+            renderList(unassignedDepartureZone, departureTrips, 'Sin salidas pendientes.');
+            renderList(unassignedReturnZone, returnTrips, 'Sin retornos pendientes.');
+
+            // NEW: Update counters to include CR and Pallet Counts
+            document.getElementById('count-departure').innerHTML = `${departureTrips.length} 
+                <span class="text-xs font-normal text-slate-500 ml-1">
+                    (<span class="text-red-600 font-bold">${formattedDepartureCR} CR</span> | PG:${totalDeparturePG} / EP:${totalDepartureEP} / PP:${totalDeparturePP})
+                </span>`;
+            document.getElementById('count-return').innerHTML = `${returnTrips.length} 
+                <span class="text-xs font-normal text-slate-500 ml-1">
+                    (<span class="text-red-600 font-bold">${formattedReturnCR} CR</span> | PG:${totalReturnPG} / EP:${totalReturnEP} / PP:${totalReturnPP})
+                </span>`;
+        }
+
+        function renderList(container, list, emptyMsg) {
+            if(list.length === 0) {
+                container.innerHTML = `<div class="text-center text-slate-300 py-4 italic text-[10px]">${emptyMsg}</div>`;
+                return;
+            }
+            list.sort((a, b) => {
+                if (a.isUrgent && !b.isUrgent) return -1;
+                if (!a.isUrgent && b.isUrgent) return 1;
+                return compareDates(a.loadDate, b.loadDate);
+            });
+            
+            list.forEach(trip => {
+                container.appendChild(createTripCard(trip));
+            });
+        }
+        
+        // --- Funciones de Viajes y Drag/Drop ---
+
+        // MODIFIED: Added isFullHeight parameter
+        function createTripCard(trip, isFullHeight = false) { 
+            const div = document.createElement('div');
+            
+            let borderColorClass;
+            if (trip.isUrgent || isOverdue(trip.loadDate)) { 
+                borderColorClass = 'border-overdue';
+            } else {
+                borderColorClass = trip.type === 'departure' ? 'border-departure' : 'border-return';
+            }
+            
+            // NEW: Added flex-grow and h-full for single FULL_LOAD trips
+            const fullHeightClass = isFullHeight ? 'h-full flex-grow' : 'h-auto'; 
+            
+            div.className = `draggable-source bg-white border-l-[4px] ${borderColorClass} shadow-sm rounded-sm p-1.5 cursor-grab relative group hover:shadow-md hover:z-10 transition-all w-full flex flex-col justify-between select-none ${fullHeightClass}`;
+            div.setAttribute('draggable', 'true');
+            div.setAttribute('ondragstart', `drag(event, ${trip.id}, '${trip.type}')`); 
+            div.setAttribute('ondblclick', `editTripModal(${trip.id})`);
+            
+            let notifyControlHTML = '';
+            
+            if (trip.assignedTruck !== null) { 
+                const buttonClasses = trip.isNotified 
+                    ? 'bg-green-500 hover:bg-green-600 text-white' 
+                    : 'bg-slate-300 hover:bg-slate-400 text-slate-800';
+                
+                notifyControlHTML = `
+                    <div class="notify-control no-print">
+                        <input type="time" 
+                            id="time-${trip.id}"
+                            value="${trip.notifyTime}"
+                            onchange="updateNotificationTime(${trip.id})" 
+                            class="text-xs border border-slate-300 rounded-l mr-[-1px] h-full focus:ring-red-500 outline-none">
+                        <button onclick="toggleNotificationStatus(${trip.id}); event.stopPropagation();" 
+                                class="h-full rounded-r transition-colors ${buttonClasses} flex items-center justify-center gap-0.5"
+                                title="${trip.isNotified ? 'Marcar como Pendiente' : 'Marcar como Avisado'}">
+                            <i class="fa-solid fa-${trip.isNotified ? 'check' : 'bell'} text-[8px]"></i>
+                            <span class="text-[8px] font-bold">AVISO</span>
+                        </button>
+                    </div>
+                    <span class="notify-date text-slate-400 font-mono">${formatDate(trip.loadDate)}</span>
+                `;
+            } else {
+                notifyControlHTML = `<span class="notify-date text-slate-400 font-mono">${formatDate(trip.loadDate)}</span>`;
+            }
+            
+            // Zone Badge (Top Left)
+            const zoneBadgeHTML = trip.zone 
+                ? `<span class="absolute top-1 left-1 px-1 py-0.5 rounded-full text-white text-[8px] font-bold ${ZONE_MAP[trip.zone].color}" title="Zona: ${trip.zone}">${ZONE_MAP[trip.zone].code}</span>` 
+                : '';
+
+            // NEW: Groupage/Full Load Badge (Top Right, adjusted position based on assignment)
+            const loadTypeBadgeRightPos = trip.assignedTruck !== null ? 'right-[115px]' : 'right-1';
+            
+            const loadTypeBadgeHTML = trip.isGroupage 
+                ? `<span class="absolute top-1 ${loadTypeBadgeRightPos} px-1 py-0.5 rounded-full text-white text-[8px] font-bold bg-sky-600" title="Viaje de Grupaje">GRU</span>` 
+                : `<span class="absolute top-1 ${loadTypeBadgeRightPos} px-1 py-0.5 rounded-full text-slate-600 bg-slate-200 text-[8px] font-bold" title="Viaje de Carga Completa">COMP</span>`;
+
+            // Pallet Info Container (PG, EP, PP, CR) - No absolute positioning, added highlighting
+            const tripCR = getTripCR(trip);
+            let palletInfoHTML = '';
+            if (trip.isGroupage) {
+                palletInfoHTML = `
+                    <div class="mt-1 p-0.5 text-[8px] font-bold text-slate-700 flex justify-end gap-2 border-t border-slate-100 bg-slate-50/70 rounded-sm">
+                        <span title="Palet Grande (PG)">PG: ${trip.pg || 0}</span>
+                        <span title="Euro Palet (EP)">EP: ${trip.ep || 0}</span>
+                        <span title="Medio Palet (PP)">PP: ${trip.pp || 0}</span>
+                        <span class="text-white bg-red-600 px-1 rounded ml-1 shadow-sm" title="Cantidad Real (CR)">CR: ${tripCR.toFixed(1)}</span>
+                    </div>
+                `;
+            }
+
+            const driverInfo = trip.driver ? `<span class="text-[9px] font-bold text-slate-700 truncate mt-0.5" title="Conductor: ${trip.driver}"><i class="fa-solid fa-user text-[8px] text-slate-400 mr-1"></i>${trip.driver}</span>` : '';
+
+            // Adjust client padding to account for zone badge
+            const clientInfoClasses = trip.assignedTruck !== null ? 'pr-[110px] pl-[25px]' : 'pr-1.5 pl-[25px]';
+
+            div.innerHTML = `
+                ${zoneBadgeHTML}
+                ${loadTypeBadgeHTML}
+                <div class="flex justify-between items-start leading-none ${clientInfoClasses}"> 
+                    <span class="font-bold text-[11px] text-slate-800 truncate" title="${trip.client}">${trip.client}</span>
+                </div>
+                ${notifyControlHTML}
+                ${driverInfo}
+                <div class="flex items-center gap-1 text-[10px] text-slate-500 mt-0.5">
+                    <span class="truncate font-medium max-w-[45%]" title="${trip.origin}">${trip.origin}</span>
+                    <i class="fa-solid fa-arrow-right text-[8px] text-slate-300"></i>
+                    <span class="truncate font-bold max-w-[45%]" title="${trip.destination}">${trip.destination}</span>
+                </div>
+                ${palletInfoHTML}
+            `;
+            return div;
+        }
+
+        function updateNotificationTime(id) {
+            const trip = trips.find(t => t.id === id);
+            const timeInput = document.getElementById(`time-${id}`);
+            if (trip && timeInput) {
+                trip.notifyTime = timeInput.value;
+                saveData();
+            }
+        }
+
+        function toggleNotificationStatus(id) {
+            const trip = trips.find(t => t.id === id);
+            if (trip) {
+                trip.isNotified = !trip.isNotified;
+                saveData();
+                renderAll(); 
+            }
+        }
+        
+        function renderTripZoneSelector(selectedZone = null) {
+            const selector = document.getElementById('tripZoneSelector');
+            if (!selector) return;
+            selector.innerHTML = ZONES.map(z => {
+                const isChecked = z.name === selectedZone ? 'checked' : '';
+                const baseColor = z.baseColor;
+                
+                // MODIFICADO: Clases de selección más visibles (outline-offset-2, outline-*-800, bg-*-700)
+                const selectedClasses = isChecked 
+                    ? `bg-${baseColor}-700 outline outline-4 outline-offset-2 outline-${baseColor}-800` 
+                    : '';
+                
+                return `
+                    <label class="flex items-center cursor-pointer">
+                        <input type="radio" 
+                               name="tripZone" 
+                               value="${z.name}" 
+                               ${isChecked}
+                               class="hidden">
+                        <span class="zone-label text-[10px] font-bold py-1 px-2 rounded-full border-2 border-${baseColor}-400 transition-all 
+                                     bg-${baseColor}-500 text-white 
+                                     hover:bg-${baseColor}-600 
+                                     ${selectedClasses}">
+                            ${z.name}
+                        </span>
+                    </label>
+                `;
+            }).join('');
+            
+            selector.querySelectorAll('input[name="tripZone"]').forEach(input => {
+                const zoneLabel = input.nextElementSibling;
+                const baseColor = ZONE_MAP[input.value].baseColor;
+                
+                input.addEventListener('change', () => {
+                     // 1. Resetear todas las etiquetas
+                     selector.querySelectorAll('input[name="tripZone"]').forEach(innerInput => {
+                        const innerLabel = innerInput.nextElementSibling;
+                        const innerBaseColor = ZONE_MAP[innerInput.value].baseColor;
+                        
+                        // Quitar las clases de selección fuerte (MODIFICADO)
+                        innerLabel.classList.remove(`bg-${innerBaseColor}-700`, `outline-4`, `outline-offset-2`, `outline-${innerBaseColor}-800`); 
+                        // Volver al estado normal
+                        innerLabel.classList.add(`bg-${innerBaseColor}-500`);
+                    });
+                    
+                    // 2. Aplicar clases a la etiqueta seleccionada (MODIFICADO)
+                    zoneLabel.classList.add(`bg-${baseColor}-700`, `outline-4`, `outline-offset-2`, `outline-${baseColor}-800`);
+                    zoneLabel.classList.remove(`bg-${baseColor}-500`);
+                });
+            });
+        }
+
+        /**
+         * Muestra u oculta los campos de palets según la casilla "Grupaje".
+         */
+        function togglePalletInputs() {
+            const isGroupage = document.getElementById('isGroupage').checked;
+            const palletContainer = document.getElementById('palletInputsContainer');
+            
+            if (palletContainer) {
+                if (isGroupage) {
+                    palletContainer.classList.remove('hidden');
+                } else {
+                    palletContainer.classList.add('hidden');
+                    // Limpiar los valores al ocultar, para evitar guardar datos erróneos en un completo.
+                    document.getElementById('pg').value = 0;
+                    document.getElementById('ep').value = 0;
+                    document.getElementById('pp').value = 0;
+                }
+            }
+        }
+
+
+        function openModal() {
+            document.getElementById('editTripId').value = '';
+            document.getElementById('modalTitle').innerText = 'Agregar Nuevo Viaje';
+            document.getElementById('submitButton').innerText = 'Crear Ficha';
+            document.getElementById('deleteButton').classList.add('hidden');
+            document.getElementById('tripForm').reset();
+            document.getElementById('loadDate').value = document.getElementById('dateFilter').value;
+            document.getElementById('unloadDate').value = document.getElementById('dateFilter').value; // Default unload to load date
+            
+            // NEW: Set default pallet values
+            document.getElementById('pg').value = 0;
+            document.getElementById('ep').value = 0;
+            document.getElementById('pp').value = 0;
+            // NEW: Set default for groupage (false)
+            document.getElementById('isGroupage').checked = false;
+
+            renderTripZoneSelector();
+            togglePalletInputs(); // Muestra/oculta los palets según el estado inicial
+            document.getElementById('modal').classList.remove('hidden');
+        }
+
+        function editTripModal(id) {
+            const trip = trips.find(t => t.id === id);
+            if (!trip) return;
+
+            document.getElementById('editTripId').value = id;
+            document.getElementById('modalTitle').innerText = 'Editar Viaje: ' + trip.client;
+            document.getElementById('submitButton').innerText = 'Actualizar Viaje';
+            document.getElementById('deleteButton').classList.remove('hidden');
+
+            document.getElementById('client').value = trip.client;
+            document.getElementById('driver').value = trip.driver || '';
+            document.getElementById('origin').value = trip.origin;
+            document.getElementById('destination').value = trip.destination;
+            document.getElementById('loadDate').value = trip.loadDate;
+            document.getElementById('unloadDate').value = trip.unloadDate;
+            document.getElementById('isUrgent').checked = trip.isUrgent;
+            document.getElementById('isGroupage').checked = trip.isGroupage || false; // NEW: Populate isGroupage
+            document.querySelector(`input[name="tripType"][value="${trip.type}"]`).checked = true;
+
+            // NEW: Populate pallet fields
+            document.getElementById('pg').value = trip.pg || 0;
+            document.getElementById('ep').value = trip.ep || 0;
+            document.getElementById('pp').value = trip.pp || 0;
+
+            renderTripZoneSelector(trip.zone);
+            togglePalletInputs(); // Muestra/oculta los palets según el estado del viaje
+
+            document.getElementById('modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.add('hidden');
+            document.getElementById('tripForm').reset();
+        }
+
+        function saveTrip(e) {
+            e.preventDefault();
+            const idToEdit = document.getElementById('editTripId').value;
+            const selectedType = document.querySelector('input[name="tripType"]:checked').value;
+            const isUrgentChecked = document.getElementById('isUrgent').checked;
+            const isGroupageChecked = document.getElementById('isGroupage').checked; // NEW: Get groupage status
+            const selectedZoneEl = document.querySelector('input[name="tripZone"]:checked');
+            const tripZone = selectedZoneEl ? selectedZoneEl.value : null;
+            
+            const loadDate = document.getElementById('loadDate').value;
+            const unloadDate = document.getElementById('unloadDate').value;
+
+            if (compareDates(loadDate, unloadDate) > 0) {
+                 alert("¡Error! La Fecha de Descarga no puede ser anterior a la Fecha de Carga.");
+                 return;
+            }
+            
+            if (!tripZone) {
+                alert("Por favor, selecciona una Zona para el Viaje.");
+                return;
+            }
+
+            const tripData = {
+                type: selectedType,
+                client: document.getElementById('client').value,
+                driver: document.getElementById('driver').value,
+                origin: document.getElementById('origin').value,
+                destination: document.getElementById('destination').value,
+                loadDate: loadDate,
+                unloadDate: unloadDate,
+                isUrgent: isUrgentChecked,
+                isGroupage: isGroupageChecked, // NEW: Save groupage status
+                zone: tripZone,
+                // NEW: Pallet data - Los valores deberían ser 0 si no es grupaje
+                pg: parseInt(document.getElementById('pg').value) || 0,
+                ep: parseInt(document.getElementById('ep').value) || 0,
+                pp: parseInt(document.getElementById('pp').value) || 0 
+            };
+            
+            // Check if at least one pallet count is entered, but ONLY IF it's a groupage trip
+            if (isGroupageChecked && tripData.pg === 0 && tripData.ep === 0 && tripData.pp === 0) {
+                 if (!confirm("ADVERTENCIA: El viaje está marcado como GRUPAJE pero no se ha introducido ninguna cantidad de palets. ¿Deseas guardar el viaje?")) {
+                    return;
+                 }
+            }
+
+
+            if (idToEdit) {
+                const tripIndex = trips.findIndex(t => t.id === parseInt(idToEdit));
+                if (tripIndex !== -1) {
+                    // Si se está editando, borramos la persistencia del camión si estaba asignado a un camión
+                    if (trips[tripIndex].assignedTruck) {
+                         clearTruckPersistence(trips[tripIndex].assignedTruck);
+                    }
+                    trips[tripIndex] = { ...trips[tripIndex], ...tripData };
+                }
+            } else {
+                const newTrip = {
+                    id: Date.now(),
+                    ...tripData,
+                    assignedTruck: null, assignedSlot: null,
+                    notifyTime: "", isNotified: false
+                };
+                trips.push(newTrip);
+            }
+            saveData(); closeModal(); renderAll();
+        }
+
+        function deleteTrip() {
+            const idToDelete = parseInt(document.getElementById('editTripId').value);
+            const trip = trips.find(t => t.id === idToDelete);
+            
+            if (confirm(`¿Estás seguro de eliminar el viaje?`)) {
+                
+                if (trip && trip.assignedTruck) {
+                    clearTruckPersistence(trip.assignedTruck);
+                }
+                
+                trips = trips.filter(t => t.id !== idToDelete);
+                saveData(); closeModal(); renderAll();
+            }
+        }
+
+        function drag(ev, tripId, tripType) {
+            ev.dataTransfer.setData("text/plain", tripId);
+            ev.dataTransfer.setData("text/tripType", tripType); 
+            const trip = trips.find(t => t.id === tripId);
+            ev.dataTransfer.setData("text/originalTruckPlate", trip.assignedTruck || ''); 
+            ev.effectAllowed = "move";
+        }
+
+        function allowDrop(ev) {
+            ev.preventDefault();
+            ev.currentTarget.classList.add('drag-over');
+        }
+
+        document.addEventListener('dragleave', e => {
+            if (e.target.classList.contains('drop-zone')) e.target.classList.remove('drag-over');
+        });
+
+        // ==========================================
+        // FUNCIÓN DROP (MODIFICADA PARA ENFORZAR EXCLUSIVIDAD DE CARGA COMPLETA)
+        // ==========================================
+        function drop(ev, plate, slotIndex) {
+            ev.preventDefault();
+            document.querySelectorAll('.drop-zone').forEach(el => el.classList.remove('drag-over'));
+
+            const tripId = parseInt(ev.dataTransfer.getData("text/plain"));
+            const originalTruckPlate = ev.dataTransfer.getData("text/originalTruckPlate"); 
+            const trip = trips.find(t => t.id === tripId);
+            
+            if (!trip) return;
+            
+            const dateFilter = document.getElementById('dateFilter').value;
+            
+            // --- Caso 1: Desasignar a pendientes (plate === null) ---
+            if (plate === null) {
+                const plateToRecalculate = trip.assignedTruck || originalTruckPlate;
+                
+                trip.assignedTruck = null;
+                trip.assignedSlot = null;
+                saveData(); 
+                
+                if (plateToRecalculate) {
+                    clearTruckPersistence(plateToRecalculate);
+                }
+                
+                renderAll();
+                return;
+            }
+            
+            // --- Caso 2: Asignar a un camión (plate !== null) ---
+            
+            const targetTruck = trucks.find(t => t.plate === plate); 
+            
+            if (targetTruck && isTruckOutOfService(targetTruck.plate, dateFilter)) {
+                alert(`¡Error! No puedes asignar un viaje al camión ${targetTruck.plate} porque está "Fuera de Servicio" en esta fecha.`);
+                return;
+            }
+
+            if (dateFilter && trip.loadDate !== dateFilter) {
+                alert(`¡Error! Este viaje es para el ${formatDate(trip.loadDate)} y estás viendo la planificación del ${formatDate(dateFilter)}.`);
+                return;
+            }
+
+            const incomingTripType = ev.dataTransfer.getData("text/tripType");
+            const dropSlotType = ev.currentTarget.getAttribute('data-slottype');
+
+            if (incomingTripType !== dropSlotType) {
+                alert(`¡Error! No puedes asignar un viaje de ${incomingTripType === 'departure' ? 'SALIDA' : 'RETORNO'} en un hueco de ${dropSlotType === 'departure' ? 'SALIDA' : 'RETORNO'}.`);
+                return;
+            }
+
+            // =========================================================================
+            // LÓGICA DE EXCLUSIVIDAD DE CARGA COMPLETA (COMP) Y STACKING DE GRUPAJE (GRU)
+            // =========================================================================
+            
+            const assignedTripsInSlot = trips.filter(t => 
+                t.assignedTruck === plate && 
+                t.assignedSlot === slotIndex && 
+                t.loadDate === dateFilter && 
+                t.id !== tripId // Excluye el viaje que se está moviendo (si ya estaba en este slot)
+            );
+
+            const isSlotOccupied = assignedTripsInSlot.length > 0;
+            const isSlotOccupiedByFullLoad = assignedTripsInSlot.some(t => t.isGroupage === false);
+            
+            // Regla 1: Viaje entrante es COMPLETO
+            if (trip.isGroupage === false) {
+                if (isSlotOccupied) {
+                    alert(`¡Error! Una Carga COMPLETA solo puede ocupar un hueco completamente vacío.`);
+                    return;
+                }
+            } 
+            
+            // Regla 2: Viaje entrante es GRUPAJE
+            else if (trip.isGroupage === true) {
+                if (isSlotOccupiedByFullLoad) {
+                    alert(`¡Error! No puedes asignar un Grupaje a un hueco que ya contiene una Carga Completa.`);
+                    return;
+                }
+                // Si el slot está vacío o solo contiene otros Grupajes, la asignación es permitida.
+            }
+            // =========================================================================
+
+            // Si el viaje ya estaba asignado a otro slot/camión, limpiamos la persistencia del camión anterior.
+            if (trip.assignedTruck && trip.assignedTruck !== plate) {
+                 clearTruckPersistence(trip.assignedTruck);
+            }
+
+            trip.assignedTruck = plate;
+            trip.assignedSlot = slotIndex;
+            
+            // Forzar recálculo de ubicación para el camión de destino para el día siguiente.
+            clearTruckPersistence(plate);
+            
+            saveData(); 
+            renderAll();
+        }
+
+        function exportToCSV() {
+            let csv = 'Matrícula,Ubicación,Slot,Tipo,Cliente,Conductor,Origen,Destino,Fecha Carga,Fecha Descarga,Urgente,Grupaje,PG,EP,PP,CR,Hora Aviso,Avisado,Fuera de Servicio,Zonas Camión,Zona Viaje,Fecha Creación,Fecha Eliminación\n'; // MODIFIED HEADER
+            const dateFilter = document.getElementById('dateFilter').value; 
+            const selectedZoneFilter = document.getElementById('zoneFilter').value;
+            
+            let filteredTrucks = trucks.filter(t => isTruckActiveForDate(t, dateFilter));
+            
+            if (selectedZoneFilter !== 'ALL') {
+                filteredTrucks = filteredTrucks.filter(t => t.zones.includes(selectedZoneFilter));
+            }
+            
+            filteredTrucks.forEach(truck => {
+                const plate = truck.plate;
+                // Usamos getTruckSuggestedLocation para obtener la ubicación de partida del día
+                const location = getTruckSuggestedLocation(plate, dateFilter) || ''; 
+                const isOutOfService = isTruckOutOfService(plate, dateFilter) ? 'SI' : 'NO';
+                const creationDate = truck.creationDate || '';
+                const deletionDate = truck.deletionDate || '';
+                const truckZones = truck.zones ? truck.zones.join('|') : ''; 
+                
+                for (let i = 0; i < 4; i++) {
+                    // MODIFIED: Get ALL trips for the slot
+                    const assignedTrips = trips.filter(t => t.assignedTruck === plate && t.assignedSlot === i && t.loadDate === dateFilter);
+                    const slotType = i % 2 === 0 ? `SALIDA ${Math.floor(i/2)+1}` : `RETORNO ${Math.floor(i/2)+1}`;
+
+                    if (assignedTrips.length > 0) { 
+                        assignedTrips.forEach(trip => {
+                            const isNotifiedText = trip.isNotified ? 'SI' : 'NO';
+                            const isUrgentText = trip.isUrgent ? 'SI' : 'NO';
+                            const isGroupageText = trip.isGroupage ? 'SI' : 'NO'; // NEW LINE
+                            const notifyTime = trip.notifyTime || '';
+                            const tripZone = trip.zone || '';
+                            const tripCR = getTripCR(trip); 
+                            // MODIFIED ROW
+                            csv += `"${plate}","${location}","${slotType}","${trip.type === 'departure' ? 'SALIDA' : 'RETORNO'}","${trip.client}","${trip.driver}","${trip.origin}","${trip.destination}","${trip.loadDate}","${trip.unloadDate}","${isUrgentText}","${isGroupageText}","${trip.pg || 0}","${trip.ep || 0}","${trip.pp || 0}","${tripCR}","${notifyTime}","${isNotifiedText}","${isOutOfService}","${truckZones}","${tripZone}","${creationDate}","${deletionDate}"\n`;
+                        });
+                    } else {
+                        csv += `"${plate}","${location}","${slotType}","","","","","","","","","","","","","","","","${isOutOfService}","${truckZones}","","${creationDate}","${deletionDate}"\n`;
+                    }
+                }
+            });
+
+            const unassignedTypeFilter = document.getElementById('unassignedTypeFilter').value;
+            let unassigned = trips.filter(t => t.assignedTruck === null && t.loadDate === dateFilter);
+            
+            if (selectedZoneFilter !== 'ALL') {
+                unassigned = unassigned.filter(t => t.zone === selectedZoneFilter);
+            }
+
+            if (unassignedTypeFilter === 'GROUPAGE') {
+                unassigned = unassigned.filter(t => t.isGroupage === true);
+            } else if (unassignedTypeFilter === 'FULL_LOAD') {
+                unassigned = unassigned.filter(t => t.isGroupage === false);
+            }
+            
+            unassigned.forEach(trip => {
+                const isUrgentText = trip.isUrgent ? 'SI' : 'NO';
+                const isGroupageText = trip.isGroupage ? 'SI' : 'NO'; // NEW LINE
+                const tripZone = trip.zone || '';
+                const tripCR = getTripCR(trip); 
+                // MODIFIED ROW
+                csv += `SIN ASIGNAR,-,"-","${trip.type === 'departure' ? 'SALIDA' : 'RETORNO'}","${trip.client}","${trip.driver}","${trip.origin}","${trip.destination}","${trip.loadDate}","${trip.unloadDate}","${isUrgentText}","${isGroupageText}","${trip.pg || 0}","${trip.ep || 0}","${trip.pp || 0}","${tripCR}",-,"NO","NO",-,"${tripZone}",-,"-"\n`;
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `planning_trafico_${dateFilter}_${selectedZoneFilter}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function printPlanning() {
+            window.print();
+        }
+
+        document.onkeydown = (evt) => { if (evt.keyCode == 27) closeModal(); };
+
+        loadData(); 
+    </script>
+</body>
+</html>
